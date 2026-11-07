@@ -1,0 +1,17 @@
+{
+  "name": "mygo-ximalaya",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.mjs --bundle --format=esm --platform=neutral --target=es2020 --legal-comments=inline --outfile=index.js",
+    "test": "node --test tests/test.mjs"
+  },
+  "devDependencies": {
+    "@noble/ciphers": "2.1.1",
+    "esbuild": "0.25.12"
+  },
+  "version": "0.1.5",
+  "dependencies": {
+    "crypto-js": "4.2.0"
+  }
+}
