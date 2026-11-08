@@ -10,7 +10,7 @@
     "@noble/ciphers": "2.1.1",
     "esbuild": "0.25.12"
   },
-  "version": "0.1.5",
+  "version": "0.1.6",
   "dependencies": {
     "crypto-js": "4.2.0"
   }

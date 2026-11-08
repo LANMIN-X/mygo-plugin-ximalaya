@@ -1,7 +1,7 @@
 {
   "id": "ximalaya",
   "name": "喜马拉雅",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "minAppVersion": "0.1.20",
   "main": "index.js",
   "playback": "stream",
@@ -41,9 +41,19 @@
       "icon": "calendar"
     },
     {
+      "title": "本机记录",
+      "page": "local-history",
+      "icon": "calendar"
+    },
+    {
       "title": "我的订阅",
       "page": "subscriptions",
       "icon": "podcast"
+    },
+    {
+      "title": "已购专辑",
+      "page": "purchases",
+      "icon": "album"
     },
     {
       "title": "我的追更",

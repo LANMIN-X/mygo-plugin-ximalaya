@@ -265,7 +265,8 @@ test('membership requires login and uses the service continuation offset', async
 test('stream exposes changed permission metadata and unsupported lossless quality', async () => {
   handler = () => ({ ret: 0, trackInfo: {} });
   await assert.rejects(plugin.stream({ id: '1', quality: 'high' }), /缺少播放权限信息/);
-  await assert.rejects(plugin.stream({ id: '1', quality: 'lossless' }), error => error.code === 'unsupported');
+  handler = () => ({ ret: 0, trackInfo: { isAuthorized: true, playUrlList: [] } });
+  await assert.rejects(plugin.stream({ id: '1', quality: 'lossless' }), error => error.code === 'unavailable');
 });
 
 // A denied stream from an expired session needs a new login, not a claim that the account lacks a purchase.
@@ -331,4 +332,55 @@ test('subscribe and unsubscribe send a validated album ID and expose service fai
   assert.equal(calls.length, count);
   handler = () => ({ ret: 500, msg: '订阅失败' });
   await assert.rejects(plugin.subscribeShow({ id: '123', on: true }), /订阅失败/);
+});
+
+// Links and IDs must resolve to their actual episode or album instead of being searched as keywords.
+test('search resolves Ximalaya album and episode links', async () => {
+  handler = url => {
+    if (url.pathname.endsWith('/album/v1/simple')) return ok({ albumPageMainInfo: { ...album, cover: 'cover.jpg' } });
+    if (url.pathname.endsWith('/play/v1/show')) return ok({ hasMore: false, tracksAudioPlay: [track(1)] });
+    if (url.pathname.endsWith('/track/simple')) return ok({ trackInfo: { trackId: 1, title: '单集', duration: 12 }, albumInfo: { albumId: 123, title: '专辑' } });
+    throw new Error('unexpected request');
+  };
+  const result = await plugin.search({ query: 'https://www.ximalaya.com/album/123?x=1', kind: 'tracks' });
+  assert.equal(result.tracks[0].id, '1');
+  const episode = await plugin.search({ query: 'sound:1', kind: 'tracks' });
+  assert.equal(episode.tracks[0].name, '单集');
+  assert.equal((await plugin.search({ query: 'sound:1', kind: 'shows' })).shows.length, 0);
+});
+
+test('purchased albums are paginated separately from subscriptions', async () => {
+  storage.set('sessionCookie', '1&_token=test');
+  handler = url => {
+    assert.equal(url.pathname, '/simple-revision-for-pc/my/getHasBroughtAlbums');
+    assert.equal(url.searchParams.get('pageNum'), '1');
+    return ok({ albumList: [album], pageNum: 1, totalCount: 31 });
+  };
+  const page = await plugin.browse({ page: 'purchases' });
+  assert.equal(page.sections[0].shows[0].id, '123');
+  assert.equal(page.sections[1].links[0].page, 'purchases:2');
+});
+
+test('local listening history deduplicates and is separate from cloud history', async () => {
+  handler = () => ok({ trackInfo: { trackId: 1, title: '单集', duration: 12 }, albumInfo: { albumId: 123, title: '专辑' } });
+  await plugin.played({ id: '1' });
+  await plugin.played({ id: '1' });
+  const page = await plugin.browse({ page: 'local-history' });
+  assert.equal(page.sections[0].tracks.length, 1);
+  assert.equal(page.sections[0].tracks[0].id, '1');
+  assert.equal(storage.has('sessionCookie'), false);
+});
+
+test('preview URLs are rejected even when authorization says true', async () => {
+  handler = () => playInfo('https://a.xmcdn.com/audio_preview_test.mp3');
+  await assert.rejects(plugin.stream({ id: '1', quality: 'high' }), /试听权限/);
+});
+
+test('lossless selects an authorized FLAC and does not downgrade to MP3', async () => {
+  handler = () => ({ ret: 0, trackInfo: { isAuthorized: true, playUrlList: [{ type: 'FLAC', url: encrypted('https://a.xmcdn.com/audio.flac') }] } });
+  const stream = await plugin.stream({ id: '1', quality: 'lossless' });
+  assert.equal(stream.type, 'flac');
+  assert.equal(stream.quality, 'lossless');
+  handler = () => playInfo();
+  await assert.rejects(plugin.stream({ id: '1', quality: 'lossless' }), /无损/);
 });

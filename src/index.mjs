@@ -73,9 +73,15 @@ function toTrack(x, show) {
   };
 }
 function historyTrack(x) {
-  return toTrack({ trackId: x.childId, title: x.childTitle, albumId: x.itemId,
+  const track = toTrack({ trackId: x.childId, title: x.childTitle, albumId: x.itemId,
     albumTitle: x.itemTitle, albumCoverPath: x.itemCoverUrl, uid: x.uid,
     nickname: x.userName, duration: x.length, isDeleted: x.isDeleted });
+  if (x.breakSecond !== null && x.breakSecond !== undefined && Number.isFinite(Number(x.breakSecond))) {
+    const seconds = Math.max(0, Math.floor(Number(x.breakSecond)));
+    const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds / 60) % 60;
+    track.description = `上次听到 ${hours ? `${hours}:${String(minutes).padStart(2, '0')}` : minutes}:${String(seconds % 60).padStart(2, '0')}`;
+  }
+  return track;
 }
 
 // These are the client's public protocol rules, not a captured session or a user's credential.
@@ -179,6 +185,22 @@ export async function account() {
 export async function search({ query, kind, offset = 0 }) {
   if (!['tracks', 'shows'].includes(kind)) throw fail('unsupported', '支持搜索声音和专辑（播客）');
   if (!query.trim()) return { [kind]: [], more: false };
+  const value = query.trim();
+  let match = /^(album|sound):([1-9]\d*)$/i.exec(value);
+  if (!match && /^https?:\/\//i.test(value)) {
+    const url = new URL(value);
+    if (url.hostname === 'ximalaya.com' || url.hostname.endsWith('.ximalaya.com')) match = /^\/(album|sound)\/([1-9]\d*)\/?$/.exec(url.pathname);
+  }
+  if (match) {
+    const type = match[1].toLowerCase(), target = id(match[2]);
+    if (type === 'album' && kind === 'tracks') {
+      const result = await show({ id: target, offset });
+      return { tracks: result.episodes, more: result.more };
+    }
+    if (offset || (type === 'sound' && kind !== 'tracks')) return { [kind]: [], more: false };
+    if (type === 'album') return { shows: [(await show({ id: target, offset: 0 })).show], more: false };
+    return { tracks: [await trackById(target)], more: false };
+  }
   const data = await request(WEB, '/revision/search', {
     core: kind === 'tracks' ? 'track' : 'album', kw: query, page: Math.floor(offset / SEARCH_SIZE) + 1,
     rows: SEARCH_SIZE, device: 'iPhone', spellchecker: true, condition: 'relation', paidFilter: false,
@@ -208,6 +230,10 @@ export async function show({ id: showId, offset = 0 }) {
     intro: info.shortIntro || info.richIntro });
   const items = list(page.tracksAudioPlay, 'tracksAudioPlay');
   const skip = offset % PAGE_SIZE;
+  if (offset === 0) {
+    const previous = host.storage.get('viewedShows');
+    host.storage.set('viewedShows', [show, ...(Array.isArray(previous) ? previous.filter(x => x.id !== show.id) : [])].slice(0, 20));
+  }
   return { show, episodes: items.slice(skip).map(x => toTrack(x, show)),
     more: page.hasMore === true };
 }
@@ -242,6 +268,8 @@ export async function browse({ page }) {
     const sections = list(ranked.rankList, 'rankList').map(x => ({
       title: '热门专辑', shows: list(x.albums, 'albums').slice(0, PAGE_SIZE).map(toShow), morePage: `rank:${hot.rankingId}`,
     }));
+    const viewed = host.storage.get('viewedShows');
+    if (Array.isArray(viewed) && viewed.length) sections.push({ title: '最近浏览', shows: viewed });
     if (cookie()) {
       const tabs = list(await pc('/pc-application-server/module/v2/explore', { version: '4.0.15' }), 'explore');
       const main = tabs.find(x => x.isDefault);
@@ -319,6 +347,19 @@ export async function browse({ page }) {
     return { title: '我的订阅', sections: pagedSections('已订阅专辑', list(data.albums, 'albums').map(x => toShow({ ...x, isSubscribe: true })),
       num * PAGE_SIZE < data.totalCount ? `subscriptions:${num + 1}` : '') };
   }
+  if (route === 'purchases' && parts.length <= 2) {
+    const num = value === undefined ? 1 : Number(value);
+    if (!Number.isSafeInteger(num) || num < 1) throw fail('unavailable', '无效的页码');
+    const data = await pc('/simple-revision-for-pc/my/getHasBroughtAlbums', { pageNum: num, pageSize: PAGE_SIZE }, true);
+    if (Number(data.pageNum) !== num || !Number.isFinite(Number(data.totalCount))) throw new Error('喜马拉雅返回了无效的已购列表');
+    const albums = list(data.albumList, 'albumList');
+    return { title: '已购专辑', subtitle: '单独购买的专辑；会员内容可通过搜索或订阅打开',
+      sections: pagedSections('已购专辑', albums.map(toShow), num * PAGE_SIZE < data.totalCount ? `purchases:${num + 1}` : '') };
+  }
+  if (route === 'local-history' && parts.length === 1) {
+    const items = host.storage.get('localRecent');
+    return { title: '本机记录', sections: [{ title: '最近播放', tracks: Array.isArray(items) ? items : [], empty: '本机暂无播放记录' }] };
+  }
   if (route === 'updates' && parts.length <= 2) {
     const num = value === undefined ? 1 : Number(value);
     if (!Number.isSafeInteger(num) || num < 1) throw fail('unavailable', '无效的页码');
@@ -335,6 +376,19 @@ export async function browse({ page }) {
 export async function recent() {
   const page = await browse({ page: 'history' });
   return page.sections.flatMap(x => x.tracks || []);
+}
+
+async function trackById(trackId) {
+  const data = await pc('/simple-revision-for-pc/track/simple', { trackId: id(trackId) });
+  if (!data.trackInfo || !data.albumInfo || String(data.trackInfo.trackId) !== String(trackId)) throw new Error('喜马拉雅未返回有效单集信息');
+  return toTrack({ ...data.trackInfo, albumId: data.albumInfo.albumId, albumTitle: data.albumInfo.title,
+    albumCoverPath: data.albumInfo.coverPath, anchorId: data.trackInfo.anchorUid });
+}
+
+export async function played({ id: trackId }) {
+  const track = await trackById(trackId);
+  const previous = host.storage.get('localRecent');
+  host.storage.set('localRecent', [track, ...(Array.isArray(previous) ? previous.filter(x => x.id !== track.id) : [])].slice(0, 50));
 }
 
 export async function lyrics({ id: trackId }) {
@@ -362,9 +416,10 @@ export async function lyrics({ id: trackId }) {
 
 function audioURL(value) {
   const url = new URL(value);
-  if (!['http:', 'https:'].includes(url.protocol) || !url.hostname.endsWith('.xmcdn.com') || url.username || url.password) {
+  if (!['http:', 'https:'].includes(url.protocol) || !url.hostname.endsWith('.xmcdn.com') || url.username || url.password || (url.port && url.port !== '443')) {
     throw new Error('喜马拉雅返回了非预期的音频地址');
   }
+  if (/(?:_preview_|\/preview\/|\/sample\/)/i.test(url.pathname)) throw fail('unavailable', '当前账号只有试听权限，无法播放完整单集');
   url.protocol = 'https:';
   return url.href;
 }
@@ -378,10 +433,9 @@ function decodeURL(value) {
 export async function stream({ id: trackId, quality }) {
   try {
     id(trackId);
-    if (quality === 'lossless') throw fail('unsupported', '当前插件提供标准和高音质 MP3，暂不支持无损音质');
     // The legacy playback API needs its app request profile; the PC profile returns 1001.
     const data = await request(WEB, `/mobile-playpage/track/v3/baseInfo/${Date.now()}`, {
-      device: 'web', trackId, trackQualityLevel: quality === 'standard' ? 0 : 1,
+      device: 'web', trackId, trackQualityLevel: quality === 'standard' ? 0 : quality === 'lossless' ? 3 : 1,
     }, false, PLAYBACK_UA);
     const info = data.trackInfo;
     if (typeof info?.isAuthorized !== 'boolean') throw new Error('喜马拉雅接口格式已变化：缺少播放权限信息');
@@ -391,12 +445,14 @@ export async function stream({ id: trackId, quality }) {
       throw fail('unavailable', '当前账号无权播放这集，请在喜马拉雅确认会员或购买权限');
     }
     const urls = list(info.playUrlList, 'trackInfo.playUrlList');
-    const selected = urls.find(x => x.type === (quality === 'standard' ? 'MP3_32' : 'MP3_64')) || urls.find(x => /^MP3_/.test(x.type));
-    if (!selected) throw fail('unavailable', '这集未提供兼容的 MP3 音频');
+    const selected = quality === 'lossless' ? urls.find(x => /^FLAC/i.test(x.type)) :
+      urls.find(x => x.type === (quality === 'standard' ? 'MP3_32' : 'MP3_64')) || urls.find(x => /^MP3_/.test(x.type));
+    if (!selected) throw fail('unavailable', quality === 'lossless' ? '这集未提供可用的无损音质' : '这集未提供兼容的 MP3 音频');
     // play_path_64 can contain HE-AAC in M4A, which MyGo cannot decode; request an actual MP3.
     const url = decodeURL(selected.url);
-    if (!new URL(url).pathname.toLowerCase().endsWith('.mp3')) throw new Error('喜马拉雅返回的 MP3 地址与实际格式不符');
-    return { url, type: 'mp3', size: selected.fileSize, quality: selected.type === 'MP3_32' ? 'standard' : 'high', bitRate: Number(selected.type.slice(4)),
+    const type = quality === 'lossless' ? 'flac' : 'mp3';
+    if (!new URL(url).pathname.toLowerCase().endsWith(`.${type}`)) throw new Error('喜马拉雅返回的音频地址与实际格式不符');
+    return { url, type, size: selected.fileSize, quality: type === 'flac' ? 'lossless' : selected.type === 'MP3_32' ? 'standard' : 'high',
       headers: { 'User-Agent': PLAYBACK_UA, Referer: WEB + '/' } };
   } catch (error) {
     host.storage.set('lastPlaybackError', {

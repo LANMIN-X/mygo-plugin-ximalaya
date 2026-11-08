@@ -12,12 +12,14 @@ A [MyGo Music](https://github.com/egoist/mygo-music) plugin for browsing and pla
 
 - Browse recommendations, the membership section, charts, and categories.
 - Search for audio tracks and albums. Albums open as podcasts in MyGo, with paginated episode lists.
-- View listening history, subscriptions, and followed updates.
+- View cloud listening history, local listening history, subscriptions, purchased albums, and followed updates.
+- Paste an album or episode URL into search, or enter `album:ID` or `sound:ID`.
+- See recently viewed albums on the Discover page.
 - Subscribe to or unsubscribe from an album on its detail page. Changes sync with your Ximalaya account.
 - Sign in by scanning a QR code with the Ximalaya app. The confirmation identifies the session as Ximalaya for desktop.
 - Play free audio and content available to your account in standard or high-quality MP3.
 
-The plugin's navigation labels are currently in Chinese. They lead to Discover, Membership, Charts, Categories, Listening History, My Subscriptions, and Followed Updates.
+The plugin's navigation labels are currently in Chinese. They lead to Discover, Membership, Charts, Categories, Listening History, Local History, My Subscriptions, Purchased Albums, and Followed Updates.
 
 ## Installation
 
@@ -42,7 +44,7 @@ You can also install a ZIP from your computer or copy the directory containing `
 - **My Subscriptions** lists subscribed albums. MyGo caches this page, so changes may take about 30 seconds to appear after reopening it.
 - **Followed Updates** lists new episodes from followed albums. Changing follow settings and syncing playback progress back to Ximalaya are not supported.
 - Access to paid, membership, and limited-time free content depends on your Ximalaya account's current permissions.
-- Standard and high-quality MP3 are available; lossless audio is not supported.
+- Standard and high-quality MP3 are available. Lossless playback requires an authorized FLAC stream from Ximalaya.
 
 ## Subtitles
 

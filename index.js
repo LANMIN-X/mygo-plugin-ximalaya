@@ -3181,7 +3181,7 @@ function toTrack(x, show2) {
   };
 }
 function historyTrack(x) {
-  return toTrack({
+  const track = toTrack({
     trackId: x.childId,
     title: x.childTitle,
     albumId: x.itemId,
@@ -3192,6 +3192,12 @@ function historyTrack(x) {
     duration: x.length,
     isDeleted: x.isDeleted
   });
+  if (x.breakSecond !== null && x.breakSecond !== void 0 && Number.isFinite(Number(x.breakSecond))) {
+    const seconds = Math.max(0, Math.floor(Number(x.breakSecond)));
+    const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds / 60) % 60;
+    track.description = `\u4E0A\u6B21\u542C\u5230 ${hours ? `${hours}:${String(minutes).padStart(2, "0")}` : minutes}:${String(seconds % 60).padStart(2, "0")}`;
+  }
+  return track;
 }
 function requestSign(url, now) {
   if (url.origin === PC) return `${now}&${host.crypto.md5(url.pathname + "&&" + now + "ximalaya").slice(9, 25)}`;
@@ -3291,6 +3297,22 @@ async function account() {
 async function search({ query, kind, offset = 0 }) {
   if (!["tracks", "shows"].includes(kind)) throw fail("unsupported", "\u652F\u6301\u641C\u7D22\u58F0\u97F3\u548C\u4E13\u8F91\uFF08\u64AD\u5BA2\uFF09");
   if (!query.trim()) return { [kind]: [], more: false };
+  const value = query.trim();
+  let match = /^(album|sound):([1-9]\d*)$/i.exec(value);
+  if (!match && /^https?:\/\//i.test(value)) {
+    const url = new URL(value);
+    if (url.hostname === "ximalaya.com" || url.hostname.endsWith(".ximalaya.com")) match = /^\/(album|sound)\/([1-9]\d*)\/?$/.exec(url.pathname);
+  }
+  if (match) {
+    const type = match[1].toLowerCase(), target = id(match[2]);
+    if (type === "album" && kind === "tracks") {
+      const result2 = await show({ id: target, offset });
+      return { tracks: result2.episodes, more: result2.more };
+    }
+    if (offset || type === "sound" && kind !== "tracks") return { [kind]: [], more: false };
+    if (type === "album") return { shows: [(await show({ id: target, offset: 0 })).show], more: false };
+    return { tracks: [await trackById(target)], more: false };
+  }
   const data = await request(WEB, "/revision/search", {
     core: kind === "tracks" ? "track" : "album",
     kw: query,
@@ -3335,6 +3357,10 @@ async function show({ id: showId, offset = 0 }) {
   });
   const items = list(page.tracksAudioPlay, "tracksAudioPlay");
   const skip = offset % PAGE_SIZE;
+  if (offset === 0) {
+    const previous = host.storage.get("viewedShows");
+    host.storage.set("viewedShows", [show2, ...Array.isArray(previous) ? previous.filter((x) => x.id !== show2.id) : []].slice(0, 20));
+  }
   return {
     show: show2,
     episodes: items.slice(skip).map((x) => toTrack(x, show2)),
@@ -3372,6 +3398,8 @@ async function browse({ page }) {
       shows: list(x.albums, "albums").slice(0, PAGE_SIZE).map(toShow),
       morePage: `rank:${hot.rankingId}`
     }));
+    const viewed = host.storage.get("viewedShows");
+    if (Array.isArray(viewed) && viewed.length) sections.push({ title: "\u6700\u8FD1\u6D4F\u89C8", shows: viewed });
     if (cookie()) {
       const tabs = list(await pc("/pc-application-server/module/v2/explore", { version: "4.0.15" }), "explore");
       const main = tabs.find((x) => x.isDefault);
@@ -3474,6 +3502,22 @@ async function browse({ page }) {
       num * PAGE_SIZE < data.totalCount ? `subscriptions:${num + 1}` : ""
     ) };
   }
+  if (route === "purchases" && parts.length <= 2) {
+    const num = value === void 0 ? 1 : Number(value);
+    if (!Number.isSafeInteger(num) || num < 1) throw fail("unavailable", "\u65E0\u6548\u7684\u9875\u7801");
+    const data = await pc("/simple-revision-for-pc/my/getHasBroughtAlbums", { pageNum: num, pageSize: PAGE_SIZE }, true);
+    if (Number(data.pageNum) !== num || !Number.isFinite(Number(data.totalCount))) throw new Error("\u559C\u9A6C\u62C9\u96C5\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u5DF2\u8D2D\u5217\u8868");
+    const albums = list(data.albumList, "albumList");
+    return {
+      title: "\u5DF2\u8D2D\u4E13\u8F91",
+      subtitle: "\u5355\u72EC\u8D2D\u4E70\u7684\u4E13\u8F91\uFF1B\u4F1A\u5458\u5185\u5BB9\u53EF\u901A\u8FC7\u641C\u7D22\u6216\u8BA2\u9605\u6253\u5F00",
+      sections: pagedSections("\u5DF2\u8D2D\u4E13\u8F91", albums.map(toShow), num * PAGE_SIZE < data.totalCount ? `purchases:${num + 1}` : "")
+    };
+  }
+  if (route === "local-history" && parts.length === 1) {
+    const items = host.storage.get("localRecent");
+    return { title: "\u672C\u673A\u8BB0\u5F55", sections: [{ title: "\u6700\u8FD1\u64AD\u653E", tracks: Array.isArray(items) ? items : [], empty: "\u672C\u673A\u6682\u65E0\u64AD\u653E\u8BB0\u5F55" }] };
+  }
   if (route === "updates" && parts.length <= 2) {
     const num = value === void 0 ? 1 : Number(value);
     if (!Number.isSafeInteger(num) || num < 1) throw fail("unavailable", "\u65E0\u6548\u7684\u9875\u7801");
@@ -3493,6 +3537,22 @@ async function browse({ page }) {
 async function recent() {
   const page = await browse({ page: "history" });
   return page.sections.flatMap((x) => x.tracks || []);
+}
+async function trackById(trackId) {
+  const data = await pc("/simple-revision-for-pc/track/simple", { trackId: id(trackId) });
+  if (!data.trackInfo || !data.albumInfo || String(data.trackInfo.trackId) !== String(trackId)) throw new Error("\u559C\u9A6C\u62C9\u96C5\u672A\u8FD4\u56DE\u6709\u6548\u5355\u96C6\u4FE1\u606F");
+  return toTrack({
+    ...data.trackInfo,
+    albumId: data.albumInfo.albumId,
+    albumTitle: data.albumInfo.title,
+    albumCoverPath: data.albumInfo.coverPath,
+    anchorId: data.trackInfo.anchorUid
+  });
+}
+async function played({ id: trackId }) {
+  const track = await trackById(trackId);
+  const previous = host.storage.get("localRecent");
+  host.storage.set("localRecent", [track, ...Array.isArray(previous) ? previous.filter((x) => x.id !== track.id) : []].slice(0, 50));
 }
 async function lyrics({ id: trackId }) {
   id(trackId);
@@ -3522,9 +3582,10 @@ async function lyrics({ id: trackId }) {
 }
 function audioURL(value) {
   const url = new URL(value);
-  if (!["http:", "https:"].includes(url.protocol) || !url.hostname.endsWith(".xmcdn.com") || url.username || url.password) {
+  if (!["http:", "https:"].includes(url.protocol) || !url.hostname.endsWith(".xmcdn.com") || url.username || url.password || url.port && url.port !== "443") {
     throw new Error("\u559C\u9A6C\u62C9\u96C5\u8FD4\u56DE\u4E86\u975E\u9884\u671F\u7684\u97F3\u9891\u5730\u5740");
   }
+  if (/(?:_preview_|\/preview\/|\/sample\/)/i.test(url.pathname)) throw fail("unavailable", "\u5F53\u524D\u8D26\u53F7\u53EA\u6709\u8BD5\u542C\u6743\u9650\uFF0C\u65E0\u6CD5\u64AD\u653E\u5B8C\u6574\u5355\u96C6");
   url.protocol = "https:";
   return url.href;
 }
@@ -3537,11 +3598,10 @@ function decodeURL(value) {
 async function stream({ id: trackId, quality }) {
   try {
     id(trackId);
-    if (quality === "lossless") throw fail("unsupported", "\u5F53\u524D\u63D2\u4EF6\u63D0\u4F9B\u6807\u51C6\u548C\u9AD8\u97F3\u8D28 MP3\uFF0C\u6682\u4E0D\u652F\u6301\u65E0\u635F\u97F3\u8D28");
     const data = await request(WEB, `/mobile-playpage/track/v3/baseInfo/${Date.now()}`, {
       device: "web",
       trackId,
-      trackQualityLevel: quality === "standard" ? 0 : 1
+      trackQualityLevel: quality === "standard" ? 0 : quality === "lossless" ? 3 : 1
     }, false, PLAYBACK_UA);
     const info = data.trackInfo;
     if (typeof info?.isAuthorized !== "boolean") throw new Error("\u559C\u9A6C\u62C9\u96C5\u63A5\u53E3\u683C\u5F0F\u5DF2\u53D8\u5316\uFF1A\u7F3A\u5C11\u64AD\u653E\u6743\u9650\u4FE1\u606F");
@@ -3551,16 +3611,16 @@ async function stream({ id: trackId, quality }) {
       throw fail("unavailable", "\u5F53\u524D\u8D26\u53F7\u65E0\u6743\u64AD\u653E\u8FD9\u96C6\uFF0C\u8BF7\u5728\u559C\u9A6C\u62C9\u96C5\u786E\u8BA4\u4F1A\u5458\u6216\u8D2D\u4E70\u6743\u9650");
     }
     const urls = list(info.playUrlList, "trackInfo.playUrlList");
-    const selected = urls.find((x) => x.type === (quality === "standard" ? "MP3_32" : "MP3_64")) || urls.find((x) => /^MP3_/.test(x.type));
-    if (!selected) throw fail("unavailable", "\u8FD9\u96C6\u672A\u63D0\u4F9B\u517C\u5BB9\u7684 MP3 \u97F3\u9891");
+    const selected = quality === "lossless" ? urls.find((x) => /^FLAC/i.test(x.type)) : urls.find((x) => x.type === (quality === "standard" ? "MP3_32" : "MP3_64")) || urls.find((x) => /^MP3_/.test(x.type));
+    if (!selected) throw fail("unavailable", quality === "lossless" ? "\u8FD9\u96C6\u672A\u63D0\u4F9B\u53EF\u7528\u7684\u65E0\u635F\u97F3\u8D28" : "\u8FD9\u96C6\u672A\u63D0\u4F9B\u517C\u5BB9\u7684 MP3 \u97F3\u9891");
     const url = decodeURL(selected.url);
-    if (!new URL(url).pathname.toLowerCase().endsWith(".mp3")) throw new Error("\u559C\u9A6C\u62C9\u96C5\u8FD4\u56DE\u7684 MP3 \u5730\u5740\u4E0E\u5B9E\u9645\u683C\u5F0F\u4E0D\u7B26");
+    const type = quality === "lossless" ? "flac" : "mp3";
+    if (!new URL(url).pathname.toLowerCase().endsWith(`.${type}`)) throw new Error("\u559C\u9A6C\u62C9\u96C5\u8FD4\u56DE\u7684\u97F3\u9891\u5730\u5740\u4E0E\u5B9E\u9645\u683C\u5F0F\u4E0D\u7B26");
     return {
       url,
-      type: "mp3",
+      type,
       size: selected.fileSize,
-      quality: selected.type === "MP3_32" ? "standard" : "high",
-      bitRate: Number(selected.type.slice(4)),
+      quality: type === "flac" ? "lossless" : selected.type === "MP3_32" ? "standard" : "high",
       headers: { "User-Agent": PLAYBACK_UA, Referer: WEB + "/" }
     };
   } catch (error) {
@@ -3578,6 +3638,7 @@ export {
   browse,
   home,
   lyrics,
+  played,
   recent,
   search,
   show,
