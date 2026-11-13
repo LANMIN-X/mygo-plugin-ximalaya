@@ -335,10 +335,33 @@ export async function browse({ page }) {
       pageNum: num, pageSize: PAGE_SIZE, includeChannel: true,
     }, true);
     const sections = [['today', '今天'], ['yesterday', '昨天'], ['earlier', '更早']].map(([key, title]) => ({
-      title, tracks: list(data[key], key).filter(x => x.type === 1 && x.childId).map(historyTrack), empty: '暂无收听记录',
+      title, links: list(data[key], key).filter(x => x.type === 1 && x.childId).map(x => {
+        const track = historyTrack(x);
+        return { title: track.name, subtitle: track.album.name, imageUrl: track.album.imageUrl, page: `history-episode:${track.id}` };
+      }), empty: '暂无收听记录',
     }));
     if (num * PAGE_SIZE < data.totalCount) sections.push(nextLink(`history:${num + 1}`));
     return { title: '收听历史', sections };
+  }
+  if (route === 'history-episode' && parts.length === 2) {
+    const trackId = id(value);
+    const data = await pc('/simple-revision-for-pc/play/v1/show', { id: trackId, ptype: 1, sort: 0, size: PAGE_SIZE });
+    const items = list(data.tracksAudioPlay, 'tracksAudioPlay');
+    const start = items.findIndex(x => String(x.trackId) === trackId);
+    if (start < 0) throw new Error('喜马拉雅未返回历史记录对应的分集');
+    const albumId = id(data.albumId);
+    const pageNum = Number(data.pageNum);
+    if (!Number.isSafeInteger(pageNum) || pageNum < 1) throw new Error('喜马拉雅返回了无效的分集页码');
+    const sections = [{ title: '从上次收听的分集开始', tracks: items.slice(start).map(x => toTrack({ ...x, albumId })) }];
+    if (data.hasMore === true) sections.push(nextLink(`history-next:${albumId}:${pageNum + 1}`));
+    return { title: '收听历史', subtitle: '选择第一集开始播放', sections };
+  }
+  if (route === 'history-next' && parts.length === 3) {
+    const albumId = id(value);
+    const data = await pc('/simple-revision-for-pc/play/v1/show', { id: albumId, ptype: 0, num: number, sort: 0, size: PAGE_SIZE });
+    const sections = [{ title: '后续分集', tracks: list(data.tracksAudioPlay, 'tracksAudioPlay').map(x => toTrack({ ...x, albumId })) }];
+    if (data.hasMore === true) sections.push(nextLink(`history-next:${albumId}:${number + 1}`));
+    return { title: '后续分集', sections };
   }
   if (route === 'subscriptions' && parts.length <= 2) {
     const num = value === undefined ? 1 : Number(value);
@@ -374,8 +397,8 @@ export async function browse({ page }) {
   throw fail('unavailable', '页面不存在');
 }
 export async function recent() {
-  const page = await browse({ page: 'history' });
-  return page.sections.flatMap(x => x.tracks || []);
+  const data = await pc('/simple-revision-for-pc/track/history/listen', { pageNum: 1, pageSize: PAGE_SIZE, includeChannel: true }, true);
+  return ['today', 'yesterday', 'earlier'].flatMap(key => list(data[key], key).filter(x => x.type === 1 && x.childId).map(historyTrack));
 }
 
 async function trackById(trackId) {

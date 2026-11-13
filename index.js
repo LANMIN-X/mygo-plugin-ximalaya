@@ -3486,11 +3486,34 @@ async function browse({ page }) {
     }, true);
     const sections = [["today", "\u4ECA\u5929"], ["yesterday", "\u6628\u5929"], ["earlier", "\u66F4\u65E9"]].map(([key, title]) => ({
       title,
-      tracks: list(data[key], key).filter((x) => x.type === 1 && x.childId).map(historyTrack),
+      links: list(data[key], key).filter((x) => x.type === 1 && x.childId).map((x) => {
+        const track = historyTrack(x);
+        return { title: track.name, subtitle: track.album.name, imageUrl: track.album.imageUrl, page: `history-episode:${track.id}` };
+      }),
       empty: "\u6682\u65E0\u6536\u542C\u8BB0\u5F55"
     }));
     if (num * PAGE_SIZE < data.totalCount) sections.push(nextLink(`history:${num + 1}`));
     return { title: "\u6536\u542C\u5386\u53F2", sections };
+  }
+  if (route === "history-episode" && parts.length === 2) {
+    const trackId = id(value);
+    const data = await pc("/simple-revision-for-pc/play/v1/show", { id: trackId, ptype: 1, sort: 0, size: PAGE_SIZE });
+    const items = list(data.tracksAudioPlay, "tracksAudioPlay");
+    const start = items.findIndex((x) => String(x.trackId) === trackId);
+    if (start < 0) throw new Error("\u559C\u9A6C\u62C9\u96C5\u672A\u8FD4\u56DE\u5386\u53F2\u8BB0\u5F55\u5BF9\u5E94\u7684\u5206\u96C6");
+    const albumId = id(data.albumId);
+    const pageNum = Number(data.pageNum);
+    if (!Number.isSafeInteger(pageNum) || pageNum < 1) throw new Error("\u559C\u9A6C\u62C9\u96C5\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u5206\u96C6\u9875\u7801");
+    const sections = [{ title: "\u4ECE\u4E0A\u6B21\u6536\u542C\u7684\u5206\u96C6\u5F00\u59CB", tracks: items.slice(start).map((x) => toTrack({ ...x, albumId })) }];
+    if (data.hasMore === true) sections.push(nextLink(`history-next:${albumId}:${pageNum + 1}`));
+    return { title: "\u6536\u542C\u5386\u53F2", subtitle: "\u9009\u62E9\u7B2C\u4E00\u96C6\u5F00\u59CB\u64AD\u653E", sections };
+  }
+  if (route === "history-next" && parts.length === 3) {
+    const albumId = id(value);
+    const data = await pc("/simple-revision-for-pc/play/v1/show", { id: albumId, ptype: 0, num: number, sort: 0, size: PAGE_SIZE });
+    const sections = [{ title: "\u540E\u7EED\u5206\u96C6", tracks: list(data.tracksAudioPlay, "tracksAudioPlay").map((x) => toTrack({ ...x, albumId })) }];
+    if (data.hasMore === true) sections.push(nextLink(`history-next:${albumId}:${number + 1}`));
+    return { title: "\u540E\u7EED\u5206\u96C6", sections };
   }
   if (route === "subscriptions" && parts.length <= 2) {
     const num = value === void 0 ? 1 : Number(value);
@@ -3535,8 +3558,8 @@ async function browse({ page }) {
   throw fail("unavailable", "\u9875\u9762\u4E0D\u5B58\u5728");
 }
 async function recent() {
-  const page = await browse({ page: "history" });
-  return page.sections.flatMap((x) => x.tracks || []);
+  const data = await pc("/simple-revision-for-pc/track/history/listen", { pageNum: 1, pageSize: PAGE_SIZE, includeChannel: true }, true);
+  return ["today", "yesterday", "earlier"].flatMap((key) => list(data[key], key).filter((x) => x.type === 1 && x.childId).map(historyTrack));
 }
 async function trackById(trackId) {
   const data = await pc("/simple-revision-for-pc/track/simple", { trackId: id(trackId) });

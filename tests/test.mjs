@@ -227,9 +227,30 @@ test('history separates audio episodes from radio records', async () => {
   storage.set('sessionCookie', '1&_token=test-session');
   handler = () => ok({ today: [{ type: 1, childId: 1, childTitle: '一', itemId: 123, itemTitle: '专辑', length: 12 }, { type: 2, childId: 9 }], yesterday: [], earlier: [], totalCount: 31 });
   const page = await plugin.browse({ page: 'history' });
-  assert.equal(page.sections[0].tracks.length, 1);
-  assert.equal(page.sections[0].tracks[0].duration, 12000);
+  assert.equal(page.sections[0].links.length, 1);
+  assert.equal(page.sections[0].links[0].page, 'history-episode:1');
+  assert.equal((await plugin.recent())[0].duration, 12000);
   assert.equal(page.sections.at(-1).links[0].page, 'history:2');
+});
+
+test('history opens the current episode and following episodes in order', async () => {
+  handler = url => {
+    assert.equal(url.pathname, '/simple-revision-for-pc/play/v1/show');
+    if (url.searchParams.get('ptype') === '1') {
+      assert.equal(url.searchParams.get('id'), '2');
+      return ok({ albumId: 123, pageNum: 5, hasMore: true, tracksAudioPlay: [track(1), track(2), track(3)] });
+    }
+    assert.equal(url.searchParams.get('id'), '123');
+    assert.equal(url.searchParams.get('num'), '6');
+    return ok({ hasMore: false, tracksAudioPlay: [track(4)] });
+  };
+  const page = await plugin.browse({ page: 'history-episode:2' });
+  assert.deepEqual(page.sections[0].tracks.map(x => x.id), ['2', '3']);
+  assert.equal(page.sections[1].links[0].page, 'history-next:123:6');
+  const next = await plugin.browse({ page: page.sections[1].links[0].page });
+  assert.deepEqual(next.sections[0].tracks.map(x => x.id), ['4']);
+  handler = () => ok({ albumId: 123, pageNum: 1, tracksAudioPlay: [track(1)] });
+  await assert.rejects(plugin.browse({ page: 'history-episode:2' }), /未返回历史记录对应的分集/);
 });
 
 // Route input cannot supply arbitrary request paths or nonnumeric identifiers.
